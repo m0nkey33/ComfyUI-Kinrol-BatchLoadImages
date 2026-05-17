@@ -222,7 +222,7 @@ async function queueAllSequential(node) {
     }
 }
 
-// ===================== UI 构建（无蓝色选中版） =====================
+// ===================== UI 构建 =====================
 
 function createBrowserUI(node) {
     let selectedFiles = new Set();
@@ -307,7 +307,7 @@ function createBrowserUI(node) {
         flex-shrink: 0;
     `;
 
-    // 信息栏 + 行数控件
+    // 信息栏 + 行数控件 + 滑块 + 模式按钮
     const infoRow = document.createElement("div");
     infoRow.style.cssText = `
         display: flex;
@@ -315,12 +315,15 @@ function createBrowserUI(node) {
         justify-content: space-between;
         margin-bottom: 6px;
         flex-shrink: 0;
+        gap: 10px;
+        flex-wrap: wrap;
     `;
 
     const info = document.createElement("div");
     info.style.cssText = `
         font-size: 12px;
         opacity: 0.85;
+        flex: 1;
     `;
 
     const rowControl = document.createElement("div");
@@ -332,14 +335,14 @@ function createBrowserUI(node) {
     `;
 
     const rowLabel = document.createElement("span");
-    rowLabel.textContent = "最大行数:";
+    rowLabel.textContent = "行数:";
     const rowInput = document.createElement("input");
     rowInput.type = "number";
     rowInput.min = 1;
     rowInput.max = 20;
     rowInput.step = 1;
     rowInput.style.cssText = `
-        width: 50px;
+        width: 45px;
         background: var(--comfy-input-bg);
         color: var(--input-text);
         border: 1px solid var(--border-color);
@@ -350,14 +353,50 @@ function createBrowserUI(node) {
 
     rowControl.appendChild(rowLabel);
     rowControl.appendChild(rowInput);
+
+    const sizeControl = document.createElement("div");
+    sizeControl.style.cssText = `
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 12px;
+    `;
+
+    const sizeLabel = document.createElement("span");
+    const sizeSlider = document.createElement("input");
+    sizeSlider.type = "range";
+    sizeSlider.min = 80;
+    sizeSlider.max = 300;
+    sizeSlider.value = 120;
+    sizeSlider.style.cssText = `width: 70px;`;
+    const sizeValue = document.createElement("span");
+    sizeValue.style.cssText = `min-width: 40px; text-align: right;`;
+
+    sizeControl.appendChild(sizeLabel);
+    sizeControl.appendChild(sizeSlider);
+    sizeControl.appendChild(sizeValue);
+
+    const toggleModeBtn = document.createElement("button");
+    toggleModeBtn.style.cssText = `
+        padding: 4px 8px;
+        background: var(--comfy-input-bg);
+        color: var(--input-text);
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
+        white-space: nowrap;
+    `;
+
     infoRow.appendChild(info);
     infoRow.appendChild(rowControl);
+    infoRow.appendChild(sizeControl);
+    infoRow.appendChild(toggleModeBtn);
 
-    // 图片网格（禁止文本/图片选中，消除蓝色层）
+    // 图片容器
     const grid = document.createElement("div");
     grid.style.cssText = `
         display: none;
-        grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
         gap: 12px;
         overflow-y: auto;
         background: var(--comfy-input-bg);
@@ -367,9 +406,44 @@ function createBrowserUI(node) {
         min-height: 0;
         user-select: none;
         -webkit-user-select: none;
-        -moz-user-select: none;
-        -ms-user-select: none;
     `;
+
+    // 模式状态
+    let alignHeight = false; // false = 宽度优先，true = 高度优先
+
+    const applyLayoutMode = () => {
+        const names = parseImageList(getImageListWidget(node)?.value);
+        if (alignHeight) {
+            grid.style.display = names.length ? 'flex' : 'none';
+            grid.style.flexWrap = 'wrap';
+            grid.style.alignItems = 'flex-start';
+            grid.style.gridTemplateColumns = '';
+            grid.style.gridAutoRows = '';
+            sizeLabel.textContent = "高度:";
+            toggleModeBtn.textContent = "宽度优先";
+        } else {
+            grid.style.display = names.length ? 'grid' : 'none';
+            grid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${sizeSlider.value}px, 1fr))`;
+            grid.style.gridAutoRows = '';
+            grid.style.flexWrap = '';
+            sizeLabel.textContent = "大小:";
+            toggleModeBtn.textContent = "高度优先";
+        }
+        sizeValue.textContent = sizeSlider.value + "px";
+        updateGridMaxHeight();
+    };
+
+    toggleModeBtn.onclick = () => {
+        alignHeight = !alignHeight;
+        applyLayoutMode();
+        redraw();
+    };
+
+    sizeSlider.addEventListener("input", () => {
+        sizeValue.textContent = sizeSlider.value + "px";
+        applyLayoutMode();
+        redraw();
+    });
 
     const updateInfo = () => {
         const names = parseImageList(getImageListWidget(node)?.value);
@@ -392,11 +466,24 @@ function createBrowserUI(node) {
         }
     };
 
-    const ESTIMATED_ROW_HEIGHT = 140;
+    const getEstimatedRowHeight = () => {
+        const thumbVal = parseInt(sizeSlider.value, 10);
+        const labelHeight = 30;
+        const cellGap = 3;
+        const gridGap = 12;
+        if (alignHeight) {
+            return thumbVal + labelHeight + cellGap + gridGap;
+        } else {
+            return thumbVal * 2 + labelHeight + cellGap + gridGap;
+        }
+    };
 
     const updateGridMaxHeight = () => {
+        const names = parseImageList(getImageListWidget(node)?.value);
+        if (!names.length) return;
         const maxRows = getMaxRows();
-        const baseHeight = maxRows * ESTIMATED_ROW_HEIGHT;
+        const estimatedRow = getEstimatedRowHeight();
+        const baseHeight = maxRows * estimatedRow;
         const containerHeight = container.clientHeight;
         if (!containerHeight) return;
 
@@ -430,36 +517,20 @@ function createBrowserUI(node) {
         }
     };
 
-    // ===== 全局定位框选逻辑（已阻止默认选中） =====
+    // ===== 框选逻辑（临时监听，不污染全局） =====
     const DRAG_THRESHOLD = 3;
-    let mouseDown = false;
-    let isSelecting = false;
-    let startX = 0, startY = 0;
     let selectionRect = null;
+    let startX = 0, startY = 0;
+    let isSelecting = false;
 
-    grid.addEventListener("mousedown", (e) => {
-        if (e.button !== 0) return;
-        if (e.target.closest("button")) return; // 删除按钮不干预
-
-        // 阻止浏览器默认的拖拽/选中行为（消除蓝色覆盖层）
-        e.preventDefault();
-        e.stopPropagation();
-
-        mouseDown = true;
-        isSelecting = false;
-        startX = e.clientX;
-        startY = e.clientY;
-    });
-
-    window.addEventListener("mousemove", (e) => {
-        if (!mouseDown) return;
+    const onMouseMove = (e) => {
+        if (!isSelecting && selectionRect === null) return;
 
         const dx = e.clientX - startX;
         const dy = e.clientY - startY;
 
         if (!isSelecting && (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD)) {
             isSelecting = true;
-            // 创建全局绝对定位矩形
             selectionRect = document.createElement("div");
             selectionRect.style.cssText = `
                 position: fixed;
@@ -475,8 +546,7 @@ function createBrowserUI(node) {
             document.body.appendChild(selectionRect);
         }
 
-        if (isSelecting) {
-            // 阻止浏览器默认选中行为
+        if (isSelecting && selectionRect) {
             e.preventDefault();
             const left = Math.min(startX, e.clientX);
             const top = Math.min(startY, e.clientY);
@@ -487,14 +557,10 @@ function createBrowserUI(node) {
             selectionRect.style.width = `${width}px`;
             selectionRect.style.height = `${height}px`;
         }
-    });
+    };
 
-    window.addEventListener("mouseup", (e) => {
-        if (!mouseDown) return;
-        mouseDown = false;
-
+    const onMouseUp = (e) => {
         if (isSelecting && selectionRect) {
-            // 完成框选
             const rect = selectionRect.getBoundingClientRect();
             const thumbCells = grid.querySelectorAll(".kinrol-thumb-cell");
 
@@ -525,7 +591,7 @@ function createBrowserUI(node) {
             selectionRect.remove();
             selectionRect = null;
         } else if (!isSelecting) {
-            // 单击切换选中（这里不需要 preventDefault，否则按钮会失效）
+            // 单击切换
             const cell = e.target.closest(".kinrol-thumb-cell");
             if (cell) {
                 const filename = cell.dataset.filename;
@@ -539,17 +605,38 @@ function createBrowserUI(node) {
             }
         }
 
+        // 移除临时监听器
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
         isSelecting = false;
+    };
+
+    grid.addEventListener("mousedown", (e) => {
+        if (e.button !== 0) return;
+        if (e.target.closest("button")) return; // 删除按钮不启动
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        startX = e.clientX;
+        startY = e.clientY;
+        isSelecting = false;
+        selectionRect = null;
+
+        // 绑定临时监听器
+        document.addEventListener("mousemove", onMouseMove);
+        document.addEventListener("mouseup", onMouseUp);
     });
 
-    // 鼠标移出窗口时自动取消框选（防止卡死）
-    window.addEventListener("mouseleave", () => {
-        if (mouseDown && isSelecting && selectionRect) {
+    // 防止鼠标松开在外部时卡死（作为保底）
+    window.addEventListener("blur", () => {
+        if (selectionRect) {
             selectionRect.remove();
             selectionRect = null;
-            isSelecting = false;
-            mouseDown = false;
         }
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+        isSelecting = false;
     });
 
     // ===== 重绘网格 =====
@@ -560,8 +647,16 @@ function createBrowserUI(node) {
         if (names.length === 0) {
             grid.style.display = "none";
             selectedFiles.clear();
+            updateInfo();
+            return;
+        }
+
+        if (alignHeight) {
+            grid.style.display = "flex";
+            grid.style.flexWrap = "wrap";
         } else {
             grid.style.display = "grid";
+            grid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${sizeSlider.value}px, 1fr))`;
         }
 
         const frag = document.createDocumentFragment();
@@ -574,45 +669,91 @@ function createBrowserUI(node) {
                 flex-direction: column;
                 gap: 3px;
             `;
+            if (alignHeight) {
+                cell.style.flex = "0 0 auto";
+                cell.style.maxWidth = "100%";
+            }
 
             const thumb = document.createElement("div");
             thumb.style.cssText = `
                 position: relative;
-                aspect-ratio: 1;
                 border-radius: 4px;
                 overflow: hidden;
                 border: 2px solid transparent;
                 background: #000;
                 transition: border-color 0.15s;
+                display: flex;
+                align-items: center;
+                justify-content: center;
             `;
+
+            if (alignHeight) {
+                thumb.style.height = `${sizeSlider.value}px`;
+                thumb.style.width = "fit-content";
+                thumb.style.minWidth = "60px";
+                thumb.style.maxWidth = "100%";
+            } else {
+                thumb.style.width = "100%";
+                thumb.style.maxHeight = `${sizeSlider.value * 2}px`;
+            }
 
             const img = document.createElement("img");
             img.src = getViewUrl(name);
             img.alt = name;
             img.loading = "lazy";
-            img.draggable = false; /* 禁止图片拖拽 */
+            img.draggable = false;
             img.style.cssText = `
-                width: 100%;
-                height: 100%;
-                object-fit: cover;
                 display: block;
+                object-fit: contain;
                 pointer-events: none;
             `;
-            img.onerror = () => {
-                img.style.display = "none";
-                const placeholder = document.createElement("div");
-                placeholder.style.cssText = `
-                    width: 100%;
-                    height: 100%;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    color: #888;
-                    font-size: 12px;
-                `;
-                placeholder.textContent = "?";
-                thumb.appendChild(placeholder);
+            if (alignHeight) {
+                img.style.height = "100%";
+                img.style.width = "auto";
+                img.style.maxWidth = "100%";
+            } else {
+                img.style.width = "100%";
+                img.style.height = "auto";
+                img.style.maxHeight = `${sizeSlider.value * 2}px`;
+            }
+
+            const label = document.createElement("div");
+            label.textContent = name;
+            label.title = name;
+            label.style.cssText = `
+                font-size: 11px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                opacity: 0.9;
+                pointer-events: none;
+            `;
+
+            const sizeLabel = document.createElement("div");
+            sizeLabel.style.cssText = `
+                font-size: 10px;
+                opacity: 0.7;
+                pointer-events: none;
+                min-height: 14px;
+            `;
+            sizeLabel.textContent = "加载中...";
+
+            const setSizeFromImage = (imgEl) => {
+                const w = imgEl.naturalWidth;
+                const h = imgEl.naturalHeight;
+                if (w && h) {
+                    sizeLabel.textContent = `${w} x ${h}`;
+                } else {
+                    sizeLabel.textContent = "尺寸未知";
+                }
             };
+
+            if (img.complete && img.naturalWidth) {
+                setSizeFromImage(img);
+            } else {
+                img.onload = () => setSizeFromImage(img);
+                img.onerror = () => { sizeLabel.textContent = "无法加载"; };
+            }
 
             const del = document.createElement("button");
             del.textContent = "×";
@@ -640,22 +781,11 @@ function createBrowserUI(node) {
                 setImageList(node, next);
             };
 
-            const label = document.createElement("div");
-            label.textContent = name;
-            label.title = name;
-            label.style.cssText = `
-                font-size: 11px;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                opacity: 0.9;
-                pointer-events: none;
-            `;
-
             thumb.appendChild(img);
             thumb.appendChild(del);
             cell.appendChild(thumb);
             cell.appendChild(label);
+            cell.appendChild(sizeLabel);
             frag.appendChild(cell);
         });
 
@@ -700,16 +830,12 @@ function createBrowserUI(node) {
     });
 
     const setDragging = (on) => {
-        container.style.border = on
-            ? "2px dashed #4a6"
-            : "1px solid var(--border-color)";
+        container.style.border = on ? "2px dashed #4a6" : "1px solid var(--border-color)";
     };
 
-    // 按钮事件
     replaceBtn.onclick = () => openMultiSelect(node, { replace: true });
     addBtn.onclick = () => openMultiSelect(node, { replace: false });
     folderBtn.onclick = () => openFolderSelect(node, { replace: true });
-
     queueAllBtn.onclick = () => queueAllSequential(node);
 
     queueSelectedBtn.onclick = async () => {
@@ -719,14 +845,12 @@ function createBrowserUI(node) {
             alert("请先选中至少一张图片");
             return;
         }
-
         const modeWidget = node.widgets?.find((w) => w.name === "mode");
         const indexWidget = node.widgets?.find((w) => w.name === "index");
         if (modeWidget) {
             modeWidget.value = "single";
             modeWidget.callback?.("single");
         }
-
         for (let i = 0; i < toQueue.length; i++) {
             const name = toQueue[i];
             const idx = names.indexOf(name);
@@ -749,16 +873,9 @@ function createBrowserUI(node) {
         setImageList(node, remaining);
     };
 
-    deselectBtn.onclick = () => {
-        clearSelection();
-    };
+    deselectBtn.onclick = () => clearSelection();
+    clearBtn.onclick = () => { selectedFiles.clear(); setImageList(node, []); };
 
-    clearBtn.onclick = () => {
-        selectedFiles.clear();
-        setImageList(node, []);
-    };
-
-    // 组装 DOM
     container.appendChild(btnRow);
     container.appendChild(brand);
     container.appendChild(statusBar);
@@ -774,6 +891,7 @@ function createBrowserUI(node) {
     `;
     container.appendChild(style);
 
+    applyLayoutMode();
     setTimeout(() => redraw(), 50);
 
     return { container, redraw, setDragging, setStatus };
