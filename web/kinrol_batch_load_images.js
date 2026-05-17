@@ -30,7 +30,7 @@ function getViewUrl(filename) {
     return `/view?filename=${encodeURIComponent(filename)}&type=input&subfolder=`;
 }
 
-// ===================== 全局拖拽处理 =====================
+// ===================== 全局拖拽处理（文件上传） =====================
 
 function isFilesDragEvent(e) {
     const dt = e.dataTransfer;
@@ -222,7 +222,7 @@ async function queueAllSequential(node) {
     }
 }
 
-// ===================== UI 构建 =====================
+// ===================== UI 构建（无蓝色选中版） =====================
 
 function createBrowserUI(node) {
     let selectedFiles = new Set();
@@ -240,7 +240,7 @@ function createBrowserUI(node) {
         flex-direction: column;
     `;
 
-    // 按钮行（已移除“入队当前”）
+    // 按钮行
     const btnRow = document.createElement("div");
     btnRow.style.cssText = `
         display: flex;
@@ -353,20 +353,22 @@ function createBrowserUI(node) {
     infoRow.appendChild(info);
     infoRow.appendChild(rowControl);
 
-    // 图片网格
+    // 图片网格（禁止文本/图片选中，消除蓝色层）
     const grid = document.createElement("div");
     grid.style.cssText = `
         display: none;
         grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
-        gap: 6px;
+        gap: 12px;
         overflow-y: auto;
         background: var(--comfy-input-bg);
-        padding: 6px;
+        padding: 10px;
         border-radius: 4px;
         flex: 1 1 auto;
         min-height: 0;
-        position: relative;
         user-select: none;
+        -webkit-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
     `;
 
     const updateInfo = () => {
@@ -390,7 +392,8 @@ function createBrowserUI(node) {
         }
     };
 
-    const ESTIMATED_ROW_HEIGHT = 120;
+    const ESTIMATED_ROW_HEIGHT = 140;
+
     const updateGridMaxHeight = () => {
         const maxRows = getMaxRows();
         const baseHeight = maxRows * ESTIMATED_ROW_HEIGHT;
@@ -427,69 +430,58 @@ function createBrowserUI(node) {
         }
     };
 
-    // ===== 全新的拖拽框选逻辑（支持任意位置开始） =====
-    let mouseDownX = 0, mouseDownY = 0;
-    let mouseDownOnGrid = false;
-    let hasStartedSelection = false;
-    const DRAG_THRESHOLD = 5; // 移动超过 5px 开始框选
-
-    let selectionRect = null;
+    // ===== 全局定位框选逻辑（已阻止默认选中） =====
+    const DRAG_THRESHOLD = 3;
+    let mouseDown = false;
+    let isSelecting = false;
     let startX = 0, startY = 0;
-
-    const getGridRelativeCoords = (clientX, clientY) => {
-        const rect = grid.getBoundingClientRect();
-        return {
-            x: clientX - rect.left + grid.scrollLeft,
-            y: clientY - rect.top + grid.scrollTop,
-        };
-    };
+    let selectionRect = null;
 
     grid.addEventListener("mousedown", (e) => {
         if (e.button !== 0) return;
-        // 如果点击的是按钮（如删除），不启动框选，保留默认行为
-        if (e.target.closest("button")) return;
+        if (e.target.closest("button")) return; // 删除按钮不干预
 
+        // 阻止浏览器默认的拖拽/选中行为（消除蓝色覆盖层）
         e.preventDefault();
-        mouseDownX = e.clientX;
-        mouseDownY = e.clientY;
-        mouseDownOnGrid = true;
-        hasStartedSelection = false;
+        e.stopPropagation();
+
+        mouseDown = true;
+        isSelecting = false;
+        startX = e.clientX;
+        startY = e.clientY;
     });
 
     window.addEventListener("mousemove", (e) => {
-        if (!mouseDownOnGrid) return;
+        if (!mouseDown) return;
 
-        const dx = e.clientX - mouseDownX;
-        const dy = e.clientY - mouseDownY;
-        if (!hasStartedSelection && (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD)) {
-            // 开始框选
-            hasStartedSelection = true;
-            const coords = getGridRelativeCoords(mouseDownX, mouseDownY);
-            startX = coords.x;
-            startY = coords.y;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
 
+        if (!isSelecting && (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD)) {
+            isSelecting = true;
+            // 创建全局绝对定位矩形
             selectionRect = document.createElement("div");
             selectionRect.style.cssText = `
-                position: absolute;
+                position: fixed;
                 border: 2px dashed #4a6;
-                background: rgba(74, 170, 102, 0.1);
+                background: rgba(74, 170, 102, 0.15);
                 pointer-events: none;
-                z-index: 10;
+                z-index: 9999;
                 left: ${startX}px;
                 top: ${startY}px;
                 width: 0;
                 height: 0;
             `;
-            grid.appendChild(selectionRect);
+            document.body.appendChild(selectionRect);
         }
 
-        if (hasStartedSelection) {
-            // 更新选择矩形
-            const coords = getGridRelativeCoords(e.clientX, e.clientY);
-            const left = Math.min(startX, coords.x);
-            const top = Math.min(startY, coords.y);
-            const width = Math.abs(coords.x - startX);
-            const height = Math.abs(coords.y - startY);
+        if (isSelecting) {
+            // 阻止浏览器默认选中行为
+            e.preventDefault();
+            const left = Math.min(startX, e.clientX);
+            const top = Math.min(startY, e.clientY);
+            const width = Math.abs(e.clientX - startX);
+            const height = Math.abs(e.clientY - startY);
             selectionRect.style.left = `${left}px`;
             selectionRect.style.top = `${top}px`;
             selectionRect.style.width = `${width}px`;
@@ -498,49 +490,42 @@ function createBrowserUI(node) {
     });
 
     window.addEventListener("mouseup", (e) => {
-        if (!mouseDownOnGrid) return;
-        mouseDownOnGrid = false;
+        if (!mouseDown) return;
+        mouseDown = false;
 
-        if (hasStartedSelection) {
+        if (isSelecting && selectionRect) {
             // 完成框选
-            if (selectionRect) {
-                const rect = selectionRect.getBoundingClientRect();
-                const thumbCells = grid.querySelectorAll(".kinrol-thumb-cell");
+            const rect = selectionRect.getBoundingClientRect();
+            const thumbCells = grid.querySelectorAll(".kinrol-thumb-cell");
 
-                const insideFiles = new Set();
-                thumbCells.forEach((cell) => {
-                    const cellRect = cell.getBoundingClientRect();
-                    const intersect = !(
-                        rect.right < cellRect.left ||
-                        rect.left > cellRect.right ||
-                        rect.bottom < cellRect.top ||
-                        rect.top > cellRect.bottom
-                    );
-                    const filename = cell.dataset.filename;
-                    if (intersect) {
-                        insideFiles.add(filename);
-                    }
-                });
+            const insideFiles = new Set();
+            thumbCells.forEach((cell) => {
+                const cellRect = cell.getBoundingClientRect();
+                const intersect = !(
+                    rect.right < cellRect.left ||
+                    rect.left > cellRect.right ||
+                    rect.bottom < cellRect.top ||
+                    rect.top > cellRect.bottom
+                );
+                const filename = cell.dataset.filename;
+                if (intersect) insideFiles.add(filename);
+            });
 
-                if (insideFiles.size > 0) {
-                    const allInsideAlreadySelected = [...insideFiles].every((f) => selectedFiles.has(f));
-                    if (allInsideAlreadySelected) {
-                        insideFiles.forEach((f) => selectedFiles.delete(f));
-                    } else {
-                        insideFiles.forEach((f) => selectedFiles.add(f));
-                    }
-
-                    thumbCells.forEach((cell) => {
-                        updateElementSelection(cell, cell.dataset.filename);
-                    });
-                    updateInfo();
+            if (insideFiles.size > 0) {
+                const allInside = [...insideFiles].every(f => selectedFiles.has(f));
+                if (allInside) {
+                    insideFiles.forEach(f => selectedFiles.delete(f));
+                } else {
+                    insideFiles.forEach(f => selectedFiles.add(f));
                 }
-
-                selectionRect.remove();
-                selectionRect = null;
+                thumbCells.forEach(c => updateElementSelection(c, c.dataset.filename));
+                updateInfo();
             }
-        } else {
-            // 没有移动，视为单击
+
+            selectionRect.remove();
+            selectionRect = null;
+        } else if (!isSelecting) {
+            // 单击切换选中（这里不需要 preventDefault，否则按钮会失效）
             const cell = e.target.closest(".kinrol-thumb-cell");
             if (cell) {
                 const filename = cell.dataset.filename;
@@ -554,19 +539,16 @@ function createBrowserUI(node) {
             }
         }
 
-        hasStartedSelection = false;
+        isSelecting = false;
     });
 
-    // 防止在网格外松开鼠标时状态未清理
+    // 鼠标移出窗口时自动取消框选（防止卡死）
     window.addEventListener("mouseleave", () => {
-        if (mouseDownOnGrid && hasStartedSelection) {
-            // 如果在框选过程中鼠标移出窗口，取消框选
-            if (selectionRect) {
-                selectionRect.remove();
-                selectionRect = null;
-            }
-            hasStartedSelection = false;
-            mouseDownOnGrid = false;
+        if (mouseDown && isSelecting && selectionRect) {
+            selectionRect.remove();
+            selectionRect = null;
+            isSelecting = false;
+            mouseDown = false;
         }
     });
 
@@ -591,7 +573,6 @@ function createBrowserUI(node) {
                 display: flex;
                 flex-direction: column;
                 gap: 3px;
-                cursor: pointer;
             `;
 
             const thumb = document.createElement("div");
@@ -609,11 +590,13 @@ function createBrowserUI(node) {
             img.src = getViewUrl(name);
             img.alt = name;
             img.loading = "lazy";
+            img.draggable = false; /* 禁止图片拖拽 */
             img.style.cssText = `
                 width: 100%;
                 height: 100%;
                 object-fit: cover;
                 display: block;
+                pointer-events: none;
             `;
             img.onerror = () => {
                 img.style.display = "none";
@@ -666,6 +649,7 @@ function createBrowserUI(node) {
                 overflow: hidden;
                 text-overflow: ellipsis;
                 opacity: 0.9;
+                pointer-events: none;
             `;
 
             thumb.appendChild(img);
