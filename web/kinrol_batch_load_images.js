@@ -230,12 +230,11 @@ function createBrowserUI(node) {
     const container = document.createElement("div");
     container.style.cssText = `
         width: 100%;
-        padding: 8px;
-        padding-top: 14px;
+        padding: 2px 8px;
         background: var(--comfy-menu-bg);
         border: 1px solid var(--border-color);
         border-radius: 6px;
-        margin: 5px 0;
+        margin: -2px 0;
         pointer-events: auto;
         display: flex;
         flex-direction: column;
