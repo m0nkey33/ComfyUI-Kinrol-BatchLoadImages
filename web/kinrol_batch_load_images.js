@@ -231,6 +231,7 @@ function createBrowserUI(node) {
     container.style.cssText = `
         width: 100%;
         padding: 8px;
+        padding-top: 14px;
         background: var(--comfy-menu-bg);
         border: 1px solid var(--border-color);
         border-radius: 6px;
@@ -245,9 +246,13 @@ function createBrowserUI(node) {
     btnRow.style.cssText = `
         display: flex;
         gap: 6px;
+        margin-top: 0;
         margin-bottom: 8px;
         flex-wrap: wrap;
     `;
+
+    const spacer = document.createElement("div");
+    spacer.style.height = "12px";
 
     const mkBtn = (label) => {
         const b = document.createElement("button");
@@ -291,7 +296,7 @@ function createBrowserUI(node) {
     brand.style.cssText = `
         font-size: 10px;
         opacity: 0.7;
-        margin-bottom: 8px;
+        margin-bottom: 2px;
         text-align: center;
         color: var(--input-text);
         flex-shrink: 0;
@@ -302,8 +307,8 @@ function createBrowserUI(node) {
     statusBar.style.cssText = `
         font-size: 12px;
         color: #4a6;
-        margin-bottom: 6px;
-        min-height: 1.2em;
+        margin-bottom: 2px;
+        min-height: 1em;
         flex-shrink: 0;
     `;
 
@@ -406,6 +411,7 @@ function createBrowserUI(node) {
         min-height: 0;
         user-select: none;
         -webkit-user-select: none;
+        margin-top: 10px;
     `;
 
     // 模式状态
@@ -480,7 +486,10 @@ function createBrowserUI(node) {
 
     const updateGridMaxHeight = () => {
         const names = parseImageList(getImageListWidget(node)?.value);
-        if (!names.length) return;
+        if (!names.length) {
+            grid.style.maxHeight = "0";
+            return;
+        }
         const maxRows = getMaxRows();
         const estimatedRow = getEstimatedRowHeight();
         const baseHeight = maxRows * estimatedRow;
@@ -876,6 +885,7 @@ function createBrowserUI(node) {
     deselectBtn.onclick = () => clearSelection();
     clearBtn.onclick = () => { selectedFiles.clear(); setImageList(node, []); };
 
+    container.appendChild(spacer);
     container.appendChild(btnRow);
     container.appendChild(brand);
     container.appendChild(statusBar);
@@ -899,11 +909,18 @@ function createBrowserUI(node) {
 
 // ===================== 注册扩展 =====================
 
+const _initializedNodeTypes = new Set();
+
 app.registerExtension({
     name: "Kinrol.BatchLoadImages.Extension",
 
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== "KinrolBatchLoadImages") return;
+
+        if (_initializedNodeTypes.has(nodeType)) {
+            return;
+        }
+        _initializedNodeTypes.add(nodeType);
 
         ensureGlobalDragDropPrevention();
 
@@ -912,29 +929,41 @@ app.registerExtension({
         nodeType.prototype.onNodeCreated = function () {
             const r = origOnNodeCreated?.apply(this, arguments);
 
+            if (this._kinrolBatchLoadImagesUI) {
+                return r;
+            }
+
             const imageListWidget = getImageListWidget(this);
             if (imageListWidget) {
-                imageListWidget.type = "hidden";
-                imageListWidget.computeSize = () => [0, -4];
-
                 const prevCallback = imageListWidget.callback;
                 imageListWidget.callback = (value) => {
                     prevCallback?.(value);
                     this._kinrolBatchLoadImagesUI?.redraw();
                 };
+                // 设置固定高度，防止输入框随内容自动扩展，增加一些底部间距
+                imageListWidget.computeSize = () => [0, 130];
+                setTimeout(() => {
+                    const widgetEl = imageListWidget.inputEl || imageListWidget.element;
+                    if (widgetEl) {
+                        widgetEl.style.height = "120px";
+                        widgetEl.style.overflow = "auto";
+                        widgetEl.style.resize = "none";
+                        widgetEl.style.marginBottom = "10px";
+                    }
+                }, 0);
             }
 
             const maxRowsWidget = getMaxRowsWidget(this);
             if (maxRowsWidget) {
                 maxRowsWidget.type = "hidden";
-                maxRowsWidget.computeSize = () => [0, -4];
+                maxRowsWidget.computeSize = () => [0, 12];
             }
 
             const ui = createBrowserUI(this);
             this._kinrolBatchLoadImagesUI = ui;
 
             this.addDOMWidget("kinrol_batch_load_images", "customwidget", ui.container);
-            this.setSize([430]);
+            this.setSize([630]);
 
             _batchLoadImagesDomUIs.add({
                 node: this,

@@ -22,6 +22,7 @@ class KinrolBatchLoadImages:
                     {
                         "multiline": True,
                         "default": "",
+                        "lines": 8,
                     },
                 ),
                 "max_images": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
