@@ -1,22 +1,14 @@
 // web/kinrol_batch_load_images.js
+// Full feature version with drag-drop and box selection
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
-
-// ===================== 工具函数 =====================
 
 function getImageListWidget(node) {
     return node?.widgets?.find((w) => w.name === "image_list");
 }
 
-function getMaxRowsWidget(node) {
-    return node?.widgets?.find((w) => w.name === "max_rows");
-}
-
 function parseImageList(value) {
-    return (value || "")
-        .split(/[\n,;]+/)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
+    return (value || "").split(/[\n,;]+/).map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
 function setImageList(node, names) {
@@ -26,71 +18,6 @@ function setImageList(node, names) {
     w.callback?.(w.value);
 }
 
-function getViewUrl(filename) {
-    return `/view?filename=${encodeURIComponent(filename)}&type=input&subfolder=`;
-}
-
-// ===================== 全局拖拽处理（文件上传） =====================
-
-function isFilesDragEvent(e) {
-    const dt = e.dataTransfer;
-    if (!dt) return false;
-    return Array.from(dt.types || []).includes("Files");
-}
-
-const _batchLoadImagesDomUIs = new Set();
-
-function _setDraggingUI(activeEntry) {
-    for (const entry of _batchLoadImagesDomUIs) {
-        entry?.setDragging?.(entry === activeEntry);
-    }
-}
-
-let _globalDragDropInstalled = false;
-
-function ensureGlobalDragDropPrevention() {
-    if (_globalDragDropInstalled) return;
-    _globalDragDropInstalled = true;
-
-    window.addEventListener(
-        "dragover",
-        (e) => {
-            if (!isFilesDragEvent(e)) return;
-            e.preventDefault();
-            const hit = [..._batchLoadImagesDomUIs].find((entry) =>
-                entry?.container?.contains(e.target)
-            );
-            _setDraggingUI(hit || null);
-        },
-        { capture: true }
-    );
-
-    window.addEventListener(
-        "drop",
-        async (e) => {
-            if (!isFilesDragEvent(e)) return;
-            e.preventDefault();
-            const hit = [..._batchLoadImagesDomUIs].find((entry) =>
-                entry?.container?.contains(e.target)
-            );
-            _setDraggingUI(null);
-            if (!hit) return;
-            const files = Array.from(e.dataTransfer?.files || []);
-            if (files.length === 0) return;
-            await uploadFilesSequential(hit.node, files, { replace: false });
-        },
-        { capture: true }
-    );
-
-    window.addEventListener(
-        "dragleave",
-        () => _setDraggingUI(null),
-        { capture: true }
-    );
-}
-
-// ===================== 图片上传 =====================
-
 async function uploadOneImage(file) {
     const body = new FormData();
     body.append("image", file, file.name);
@@ -99,9 +26,7 @@ async function uploadOneImage(file) {
         method: "POST",
         body,
     });
-    if (!resp.ok) {
-        throw new Error(await resp.text());
-    }
+    if (!resp.ok) throw new Error(await resp.text());
     const json = await resp.json();
     return json?.name;
 }
@@ -109,29 +34,22 @@ async function uploadOneImage(file) {
 async function uploadFilesSequential(node, files, { replace = false } = {}) {
     const w = getImageListWidget(node);
     if (!w) return [];
-
     const existing = replace ? [] : parseImageList(w.value);
     const uploaded = [];
-
-    const ui = node._kinrolBatchLoadImagesUI;
-    if (ui) ui.setStatus(`正在上传 0/${files.length} ...`);
-
+    
     for (let i = 0; i < files.length; i++) {
         const file = files[i];
         if (!file || (file.type && !file.type.startsWith("image/"))) continue;
-        const name = await uploadOneImage(file);
-        if (name) uploaded.push(name);
-        if (ui) ui.setStatus(`正在上传 ${i + 1}/${files.length} ...`);
+        try {
+            const name = await uploadOneImage(file);
+            if (name) uploaded.push(name);
+        } catch (err) {
+            console.error("上传失败:", err);
+        }
     }
-
-    const merged = existing.concat(uploaded);
-    setImageList(node, merged);
-
-    if (ui) ui.setStatus("");
+    setImageList(node, existing.concat(uploaded));
     return uploaded;
 }
-
-// ===================== 文件选择 =====================
 
 function openMultiSelect(node, { replace = false } = {}) {
     return new Promise((resolve) => {
@@ -144,13 +62,12 @@ function openMultiSelect(node, { replace = false } = {}) {
 
         input.onchange = async (e) => {
             try {
-                const files = Array.from(e.target.files || []);
-                await uploadFilesSequential(node, files, { replace });
-                resolve();
+                await uploadFilesSequential(node, Array.from(e.target.files || []), { replace });
             } catch (err) {
                 console.error("上传失败:", err);
             } finally {
                 document.body.removeChild(input);
+                resolve();
             }
         };
         input.click();
@@ -174,34 +91,27 @@ function openFolderSelect(node, { replace = false } = {}) {
                 const allowExt = new Set([".png", ".jpg", ".jpeg", ".webp"]);
                 files = files.filter((f) => {
                     const name = (f?.name || "").toLowerCase();
-                    for (const ext of allowExt) if (name.endsWith(ext)) return true;
-                    return false;
+                    return [...allowExt].some((ext) => name.endsWith(ext));
                 });
                 files.sort((a, b) =>
-                    (a.webkitRelativePath || a.name).localeCompare(
-                        b.webkitRelativePath || b.name
-                    )
+                    (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name)
                 );
                 await uploadFilesSequential(node, files, { replace });
-                resolve();
             } catch (err) {
                 console.error("文件夹上传失败:", err);
             } finally {
                 document.body.removeChild(input);
+                resolve();
             }
         };
         input.click();
     });
 }
 
-// ===================== 队列操作 =====================
-
 async function queueAllSequential(node) {
-    const w = getImageListWidget(node);
-    if (!w) return;
-    const names = parseImageList(w.value);
+    const names = parseImageList(getImageListWidget(node)?.value);
     if (names.length === 0) {
-        alert("没有图片可以入队");
+        alert("没有图片可队列");
         return;
     }
 
@@ -222,693 +132,31 @@ async function queueAllSequential(node) {
     }
 }
 
-// ===================== UI 构建 =====================
+async function queueSelectedSequential(node, selectedFiles) {
+    const names = parseImageList(getImageListWidget(node)?.value);
+    const toQueue = names.filter((n) => selectedFiles.has(n));
+    if (toQueue.length === 0) {
+        alert("请至少选择一张图片");
+        return;
+    }
 
-function createBrowserUI(node) {
-    let selectedFiles = new Set();
+    const modeWidget = node.widgets?.find((w) => w.name === "mode");
+    const indexWidget = node.widgets?.find((w) => w.name === "index");
 
-    const container = document.createElement("div");
-    container.style.cssText = `
-        width: 100%;
-        padding: 2px 8px;
-        background: var(--comfy-menu-bg);
-        border: 1px solid var(--border-color);
-        border-radius: 6px;
-        margin: -2px 0;
-        pointer-events: auto;
-        display: flex;
-        flex-direction: column;
-    `;
+    if (modeWidget) {
+        modeWidget.value = "single";
+        modeWidget.callback?.("single");
+    }
 
-    // 按钮行
-    const btnRow = document.createElement("div");
-    btnRow.style.cssText = `
-        display: flex;
-        gap: 6px;
-        margin-top: 0;
-        margin-bottom: 8px;
-        flex-wrap: wrap;
-    `;
-
-    const spacer = document.createElement("div");
-    spacer.style.height = "12px";
-
-    const mkBtn = (label) => {
-        const b = document.createElement("button");
-        b.textContent = label;
-        b.style.cssText = `
-            flex: 1;
-            min-width: 56px;
-            padding: 6px 4px;
-            background: var(--comfy-input-bg);
-            color: var(--input-text);
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-            white-space: nowrap;
-        `;
-        return b;
-    };
-
-    const replaceBtn = mkBtn("选择图片");
-    const addBtn = mkBtn("追加图片");
-    const folderBtn = mkBtn("选择文件夹");
-    const queueAllBtn = mkBtn("逐张入队");
-    const queueSelectedBtn = mkBtn("入队选中");
-    const deleteSelectedBtn = mkBtn("删除选中");
-    const deselectBtn = mkBtn("取消选中");
-    const clearBtn = mkBtn("清空");
-
-    btnRow.appendChild(replaceBtn);
-    btnRow.appendChild(addBtn);
-    btnRow.appendChild(folderBtn);
-    btnRow.appendChild(queueAllBtn);
-    btnRow.appendChild(queueSelectedBtn);
-    btnRow.appendChild(deleteSelectedBtn);
-    btnRow.appendChild(deselectBtn);
-    btnRow.appendChild(clearBtn);
-
-    // 品牌标识
-    const brand = document.createElement("div");
-    brand.textContent = "Kinrol Batch Load Images";
-    brand.style.cssText = `
-        font-size: 10px;
-        opacity: 0.7;
-        margin-bottom: 2px;
-        text-align: center;
-        color: var(--input-text);
-        flex-shrink: 0;
-    `;
-
-    // 状态栏
-    const statusBar = document.createElement("div");
-    statusBar.style.cssText = `
-        font-size: 12px;
-        color: #4a6;
-        margin-bottom: 2px;
-        min-height: 1em;
-        flex-shrink: 0;
-    `;
-
-    // 信息栏 + 行数控件 + 滑块 + 模式按钮
-    const infoRow = document.createElement("div");
-    infoRow.style.cssText = `
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-bottom: 6px;
-        flex-shrink: 0;
-        gap: 10px;
-        flex-wrap: wrap;
-    `;
-
-    const info = document.createElement("div");
-    info.style.cssText = `
-        font-size: 12px;
-        opacity: 0.85;
-        flex: 1;
-    `;
-
-    const rowControl = document.createElement("div");
-    rowControl.style.cssText = `
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        font-size: 12px;
-    `;
-
-    const rowLabel = document.createElement("span");
-    rowLabel.textContent = "行数:";
-    const rowInput = document.createElement("input");
-    rowInput.type = "number";
-    rowInput.min = 1;
-    rowInput.max = 20;
-    rowInput.step = 1;
-    rowInput.style.cssText = `
-        width: 45px;
-        background: var(--comfy-input-bg);
-        color: var(--input-text);
-        border: 1px solid var(--border-color);
-        border-radius: 4px;
-        padding: 2px 4px;
-        font-size: 12px;
-    `;
-
-    rowControl.appendChild(rowLabel);
-    rowControl.appendChild(rowInput);
-
-    const sizeControl = document.createElement("div");
-    sizeControl.style.cssText = `
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        font-size: 12px;
-    `;
-
-    const sizeLabel = document.createElement("span");
-    const sizeSlider = document.createElement("input");
-    sizeSlider.type = "range";
-    sizeSlider.min = 80;
-    sizeSlider.max = 300;
-    sizeSlider.value = 120;
-    sizeSlider.style.cssText = `width: 70px;`;
-    const sizeValue = document.createElement("span");
-    sizeValue.style.cssText = `min-width: 40px; text-align: right;`;
-
-    sizeControl.appendChild(sizeLabel);
-    sizeControl.appendChild(sizeSlider);
-    sizeControl.appendChild(sizeValue);
-
-    const toggleModeBtn = document.createElement("button");
-    toggleModeBtn.style.cssText = `
-        padding: 4px 8px;
-        background: var(--comfy-input-bg);
-        color: var(--input-text);
-        border: 1px solid var(--border-color);
-        border-radius: 4px;
-        cursor: pointer;
-        font-size: 12px;
-        white-space: nowrap;
-    `;
-
-    infoRow.appendChild(info);
-    infoRow.appendChild(rowControl);
-    infoRow.appendChild(sizeControl);
-    infoRow.appendChild(toggleModeBtn);
-
-    // 图片容器
-    const grid = document.createElement("div");
-    grid.style.cssText = `
-        display: none;
-        gap: 12px;
-        overflow-y: auto;
-        background: var(--comfy-input-bg);
-        padding: 10px;
-        border-radius: 4px;
-        flex: 1 1 auto;
-        min-height: 0;
-        user-select: none;
-        -webkit-user-select: none;
-        margin-top: 10px;
-    `;
-
-    // 模式状态
-    let alignHeight = false; // false = 宽度优先，true = 高度优先
-
-    const applyLayoutMode = () => {
-        const names = parseImageList(getImageListWidget(node)?.value);
-        if (alignHeight) {
-            grid.style.display = names.length ? 'flex' : 'none';
-            grid.style.flexWrap = 'wrap';
-            grid.style.alignItems = 'flex-start';
-            grid.style.gridTemplateColumns = '';
-            grid.style.gridAutoRows = '';
-            sizeLabel.textContent = "高度:";
-            toggleModeBtn.textContent = "宽度优先";
-        } else {
-            grid.style.display = names.length ? 'grid' : 'none';
-            grid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${sizeSlider.value}px, 1fr))`;
-            grid.style.gridAutoRows = '';
-            grid.style.flexWrap = '';
-            sizeLabel.textContent = "大小:";
-            toggleModeBtn.textContent = "高度优先";
+    for (const name of toQueue) {
+        const idx = names.indexOf(name);
+        if (idx !== -1 && indexWidget) {
+            indexWidget.value = idx;
+            indexWidget.callback?.(idx);
         }
-        sizeValue.textContent = sizeSlider.value + "px";
-        updateGridMaxHeight();
-    };
-
-    toggleModeBtn.onclick = () => {
-        alignHeight = !alignHeight;
-        applyLayoutMode();
-        redraw();
-    };
-
-    sizeSlider.addEventListener("input", () => {
-        sizeValue.textContent = sizeSlider.value + "px";
-        applyLayoutMode();
-        redraw();
-    });
-
-    const updateInfo = () => {
-        const names = parseImageList(getImageListWidget(node)?.value);
-        const selectedCount = selectedFiles.size;
-        info.textContent = names.length
-            ? `已选择 ${names.length} 张${selectedCount > 0 ? ` (选中 ${selectedCount})` : ""}`
-            : "暂无图片";
-    };
-
-    const getMaxRows = () => {
-        const widget = getMaxRowsWidget(node);
-        return widget ? widget.value : 5;
-    };
-
-    const setMaxRows = (value) => {
-        const widget = getMaxRowsWidget(node);
-        if (widget) {
-            widget.value = value;
-            widget.callback?.(value);
-        }
-    };
-
-    const getEstimatedRowHeight = () => {
-        const thumbVal = parseInt(sizeSlider.value, 10);
-        const labelHeight = 30;
-        const cellGap = 3;
-        const gridGap = 12;
-        if (alignHeight) {
-            return thumbVal + labelHeight + cellGap + gridGap;
-        } else {
-            return thumbVal * 2 + labelHeight + cellGap + gridGap;
-        }
-    };
-
-    const updateGridMaxHeight = () => {
-        const names = parseImageList(getImageListWidget(node)?.value);
-        if (!names.length) {
-            grid.style.maxHeight = "0";
-            return;
-        }
-        const maxRows = getMaxRows();
-        const estimatedRow = getEstimatedRowHeight();
-        const baseHeight = maxRows * estimatedRow;
-        const containerHeight = container.clientHeight;
-        if (!containerHeight) return;
-
-        const fixedHeight =
-            btnRow.offsetHeight +
-            brand.offsetHeight +
-            statusBar.offsetHeight +
-            infoRow.offsetHeight +
-            16;
-        const availableHeight = containerHeight - fixedHeight;
-        const targetHeight = Math.max(baseHeight, availableHeight);
-        grid.style.maxHeight = `${targetHeight}px`;
-    };
-
-    const resizeObserver = new ResizeObserver(() => {
-        updateGridMaxHeight();
-    });
-    resizeObserver.observe(container);
-
-    const clearSelection = () => {
-        selectedFiles.clear();
-        grid.querySelectorAll(".kinrol-selected").forEach((el) => el.classList.remove("kinrol-selected"));
-        updateInfo();
-    };
-
-    const updateElementSelection = (el, filename) => {
-        if (selectedFiles.has(filename)) {
-            el.classList.add("kinrol-selected");
-        } else {
-            el.classList.remove("kinrol-selected");
-        }
-    };
-
-    // ===== 框选逻辑（临时监听，不污染全局） =====
-    const DRAG_THRESHOLD = 3;
-    let selectionRect = null;
-    let startX = 0, startY = 0;
-    let isSelecting = false;
-
-    const onMouseMove = (e) => {
-        if (!isSelecting && selectionRect === null) return;
-
-        const dx = e.clientX - startX;
-        const dy = e.clientY - startY;
-
-        if (!isSelecting && (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD)) {
-            isSelecting = true;
-            selectionRect = document.createElement("div");
-            selectionRect.style.cssText = `
-                position: fixed;
-                border: 2px dashed #4a6;
-                background: rgba(74, 170, 102, 0.15);
-                pointer-events: none;
-                z-index: 9999;
-                left: ${startX}px;
-                top: ${startY}px;
-                width: 0;
-                height: 0;
-            `;
-            document.body.appendChild(selectionRect);
-        }
-
-        if (isSelecting && selectionRect) {
-            e.preventDefault();
-            const left = Math.min(startX, e.clientX);
-            const top = Math.min(startY, e.clientY);
-            const width = Math.abs(e.clientX - startX);
-            const height = Math.abs(e.clientY - startY);
-            selectionRect.style.left = `${left}px`;
-            selectionRect.style.top = `${top}px`;
-            selectionRect.style.width = `${width}px`;
-            selectionRect.style.height = `${height}px`;
-        }
-    };
-
-    const onMouseUp = (e) => {
-        if (isSelecting && selectionRect) {
-            const rect = selectionRect.getBoundingClientRect();
-            const thumbCells = grid.querySelectorAll(".kinrol-thumb-cell");
-
-            const insideFiles = new Set();
-            thumbCells.forEach((cell) => {
-                const cellRect = cell.getBoundingClientRect();
-                const intersect = !(
-                    rect.right < cellRect.left ||
-                    rect.left > cellRect.right ||
-                    rect.bottom < cellRect.top ||
-                    rect.top > cellRect.bottom
-                );
-                const filename = cell.dataset.filename;
-                if (intersect) insideFiles.add(filename);
-            });
-
-            if (insideFiles.size > 0) {
-                const allInside = [...insideFiles].every(f => selectedFiles.has(f));
-                if (allInside) {
-                    insideFiles.forEach(f => selectedFiles.delete(f));
-                } else {
-                    insideFiles.forEach(f => selectedFiles.add(f));
-                }
-                thumbCells.forEach(c => updateElementSelection(c, c.dataset.filename));
-                updateInfo();
-            }
-
-            selectionRect.remove();
-            selectionRect = null;
-        } else if (!isSelecting) {
-            // 单击切换
-            const cell = e.target.closest(".kinrol-thumb-cell");
-            if (cell) {
-                const filename = cell.dataset.filename;
-                if (selectedFiles.has(filename)) {
-                    selectedFiles.delete(filename);
-                } else {
-                    selectedFiles.add(filename);
-                }
-                updateElementSelection(cell, filename);
-                updateInfo();
-            }
-        }
-
-        // 移除临时监听器
-        document.removeEventListener("mousemove", onMouseMove);
-        document.removeEventListener("mouseup", onMouseUp);
-        isSelecting = false;
-    };
-
-    grid.addEventListener("mousedown", (e) => {
-        if (e.button !== 0) return;
-        if (e.target.closest("button")) return; // 删除按钮不启动
-
-        e.preventDefault();
-        e.stopPropagation();
-
-        startX = e.clientX;
-        startY = e.clientY;
-        isSelecting = false;
-        selectionRect = null;
-
-        // 绑定临时监听器
-        document.addEventListener("mousemove", onMouseMove);
-        document.addEventListener("mouseup", onMouseUp);
-    });
-
-    // 防止鼠标松开在外部时卡死（作为保底）
-    window.addEventListener("blur", () => {
-        if (selectionRect) {
-            selectionRect.remove();
-            selectionRect = null;
-        }
-        document.removeEventListener("mousemove", onMouseMove);
-        document.removeEventListener("mouseup", onMouseUp);
-        isSelecting = false;
-    });
-
-    // ===== 重绘网格 =====
-    const redraw = () => {
-        const names = parseImageList(getImageListWidget(node)?.value);
-        grid.innerHTML = "";
-
-        if (names.length === 0) {
-            grid.style.display = "none";
-            selectedFiles.clear();
-            updateInfo();
-            return;
-        }
-
-        if (alignHeight) {
-            grid.style.display = "flex";
-            grid.style.flexWrap = "wrap";
-        } else {
-            grid.style.display = "grid";
-            grid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${sizeSlider.value}px, 1fr))`;
-        }
-
-        const frag = document.createDocumentFragment();
-        names.forEach((name, idx) => {
-            const cell = document.createElement("div");
-            cell.className = "kinrol-thumb-cell";
-            cell.dataset.filename = name;
-            cell.style.cssText = `
-                display: flex;
-                flex-direction: column;
-                gap: 3px;
-            `;
-            if (alignHeight) {
-                cell.style.flex = "0 0 auto";
-                cell.style.maxWidth = "100%";
-            }
-
-            const thumb = document.createElement("div");
-            thumb.style.cssText = `
-                position: relative;
-                border-radius: 4px;
-                overflow: hidden;
-                border: 2px solid transparent;
-                background: #000;
-                transition: border-color 0.15s;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-            `;
-
-            if (alignHeight) {
-                thumb.style.height = `${sizeSlider.value}px`;
-                thumb.style.width = "fit-content";
-                thumb.style.minWidth = "60px";
-                thumb.style.maxWidth = "100%";
-            } else {
-                thumb.style.width = "100%";
-                thumb.style.maxHeight = `${sizeSlider.value * 2}px`;
-            }
-
-            const img = document.createElement("img");
-            img.src = getViewUrl(name);
-            img.alt = name;
-            img.loading = "lazy";
-            img.draggable = false;
-            img.style.cssText = `
-                display: block;
-                object-fit: contain;
-                pointer-events: none;
-            `;
-            if (alignHeight) {
-                img.style.height = "100%";
-                img.style.width = "auto";
-                img.style.maxWidth = "100%";
-            } else {
-                img.style.width = "100%";
-                img.style.height = "auto";
-                img.style.maxHeight = `${sizeSlider.value * 2}px`;
-            }
-
-            const label = document.createElement("div");
-            label.textContent = name;
-            label.title = name;
-            label.style.cssText = `
-                font-size: 11px;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                opacity: 0.9;
-                pointer-events: none;
-            `;
-
-            const sizeLabel = document.createElement("div");
-            sizeLabel.style.cssText = `
-                font-size: 10px;
-                opacity: 0.7;
-                pointer-events: none;
-                min-height: 14px;
-            `;
-            sizeLabel.textContent = "加载中...";
-
-            const setSizeFromImage = (imgEl) => {
-                const w = imgEl.naturalWidth;
-                const h = imgEl.naturalHeight;
-                if (w && h) {
-                    sizeLabel.textContent = `${w} x ${h}`;
-                } else {
-                    sizeLabel.textContent = "尺寸未知";
-                }
-            };
-
-            if (img.complete && img.naturalWidth) {
-                setSizeFromImage(img);
-            } else {
-                img.onload = () => setSizeFromImage(img);
-                img.onerror = () => { sizeLabel.textContent = "无法加载"; };
-            }
-
-            const del = document.createElement("button");
-            del.textContent = "×";
-            del.title = "删除此图片";
-            del.style.cssText = `
-                position: absolute;
-                top: 2px;
-                right: 2px;
-                width: 20px;
-                height: 20px;
-                background: rgba(255, 0, 0, 0.75);
-                color: #fff;
-                border: none;
-                border-radius: 3px;
-                cursor: pointer;
-                font-size: 16px;
-                line-height: 1;
-                z-index: 5;
-            `;
-            del.onclick = (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const next = names.slice(0, idx).concat(names.slice(idx + 1));
-                selectedFiles.delete(name);
-                setImageList(node, next);
-            };
-
-            thumb.appendChild(img);
-            thumb.appendChild(del);
-            cell.appendChild(thumb);
-            cell.appendChild(label);
-            cell.appendChild(sizeLabel);
-            frag.appendChild(cell);
-        });
-
-        grid.appendChild(frag);
-        const allCells = grid.querySelectorAll(".kinrol-thumb-cell");
-        allCells.forEach((cell) => {
-            updateElementSelection(cell, cell.dataset.filename);
-        });
-
-        updateInfo();
-        updateGridMaxHeight();
-        app.graph?.setDirtyCanvas(true);
-    };
-
-    const setStatus = (text) => {
-        statusBar.textContent = text || "";
-    };
-
-    rowInput.value = getMaxRows();
-    rowInput.addEventListener("change", () => {
-        let val = parseInt(rowInput.value, 10);
-        if (isNaN(val)) val = 5;
-        val = Math.min(20, Math.max(1, val));
-        rowInput.value = val;
-        setMaxRows(val);
-        updateGridMaxHeight();
-        app.graph?.setDirtyCanvas(true);
-    });
-
-    container.addEventListener("dragover", (e) => {
-        if (!isFilesDragEvent(e)) return;
-        e.preventDefault();
-        e.stopPropagation();
-    });
-
-    container.addEventListener("drop", async (e) => {
-        if (!isFilesDragEvent(e)) return;
-        e.preventDefault();
-        e.stopPropagation();
-        const files = Array.from(e.dataTransfer?.files || []);
-        await uploadFilesSequential(node, files, { replace: false });
-    });
-
-    const setDragging = (on) => {
-        container.style.border = on ? "2px dashed #4a6" : "1px solid var(--border-color)";
-    };
-
-    replaceBtn.onclick = () => openMultiSelect(node, { replace: true });
-    addBtn.onclick = () => openMultiSelect(node, { replace: false });
-    folderBtn.onclick = () => openFolderSelect(node, { replace: true });
-    queueAllBtn.onclick = () => queueAllSequential(node);
-
-    queueSelectedBtn.onclick = async () => {
-        const names = parseImageList(getImageListWidget(node)?.value);
-        const toQueue = names.filter((n) => selectedFiles.has(n));
-        if (toQueue.length === 0) {
-            alert("请先选中至少一张图片");
-            return;
-        }
-        const modeWidget = node.widgets?.find((w) => w.name === "mode");
-        const indexWidget = node.widgets?.find((w) => w.name === "index");
-        if (modeWidget) {
-            modeWidget.value = "single";
-            modeWidget.callback?.("single");
-        }
-        for (let i = 0; i < toQueue.length; i++) {
-            const name = toQueue[i];
-            const idx = names.indexOf(name);
-            if (idx !== -1 && indexWidget) {
-                indexWidget.value = idx;
-                indexWidget.callback?.(idx);
-            }
-            await app.queuePrompt();
-        }
-    };
-
-    deleteSelectedBtn.onclick = () => {
-        if (selectedFiles.size === 0) {
-            alert("请先选中要删除的图片");
-            return;
-        }
-        const names = parseImageList(getImageListWidget(node)?.value);
-        const remaining = names.filter((n) => !selectedFiles.has(n));
-        selectedFiles.clear();
-        setImageList(node, remaining);
-    };
-
-    deselectBtn.onclick = () => clearSelection();
-    clearBtn.onclick = () => { selectedFiles.clear(); setImageList(node, []); };
-
-    container.appendChild(spacer);
-    container.appendChild(btnRow);
-    container.appendChild(brand);
-    container.appendChild(statusBar);
-    container.appendChild(infoRow);
-    container.appendChild(grid);
-
-    const style = document.createElement("style");
-    style.textContent = `
-        .kinrol-thumb-cell.kinrol-selected > div:first-child {
-            border-color: #4a6 !important;
-            box-shadow: 0 0 0 1px #4a6;
-        }
-    `;
-    container.appendChild(style);
-
-    applyLayoutMode();
-    setTimeout(() => redraw(), 50);
-
-    return { container, redraw, setDragging, setStatus };
+        await app.queuePrompt();
+    }
 }
-
-// ===================== 注册扩展 =====================
-
-const _initializedNodeTypes = new Set();
 
 app.registerExtension({
     name: "Kinrol.BatchLoadImages.Extension",
@@ -916,71 +164,394 @@ app.registerExtension({
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== "KinrolBatchLoadImages") return;
 
-        if (_initializedNodeTypes.has(nodeType)) {
-            return;
-        }
-        _initializedNodeTypes.add(nodeType);
-
-        ensureGlobalDragDropPrevention();
-
         const origOnNodeCreated = nodeType.prototype.onNodeCreated;
 
         nodeType.prototype.onNodeCreated = function () {
             const r = origOnNodeCreated?.apply(this, arguments);
 
-            if (this._kinrolBatchLoadImagesUI) {
-                return r;
-            }
+            try {
+                const imageListWidget = getImageListWidget(this);
+                if (!imageListWidget) {
+                    console.warn("KinrolBatchLoadImages: image_list widget not found");
+                    return r;
+                }
 
-            const imageListWidget = getImageListWidget(this);
-            if (imageListWidget) {
-                const prevCallback = imageListWidget.callback;
-                imageListWidget.callback = (value) => {
-                    prevCallback?.(value);
-                    this._kinrolBatchLoadImagesUI?.redraw();
-                };
-                // 设置固定高度，防止输入框随内容自动扩展，增加一些底部间距
                 imageListWidget.computeSize = () => [0, 130];
+
                 setTimeout(() => {
                     const widgetEl = imageListWidget.inputEl || imageListWidget.element;
                     if (widgetEl) {
                         widgetEl.style.height = "120px";
                         widgetEl.style.overflow = "auto";
                         widgetEl.style.resize = "none";
-                        widgetEl.style.marginBottom = "10px";
                     }
                 }, 0);
-            }
 
-            const maxRowsWidget = getMaxRowsWidget(this);
-            if (maxRowsWidget) {
-                maxRowsWidget.type = "hidden";
-                maxRowsWidget.computeSize = () => [0, 12];
-            }
+                const container = document.createElement("div");
+                container.className = "kinrol-batch-load-container";
+                container.style.cssText = `
+                    width: 100%;
+                    height: 100%;
+                    display: flex;
+                    flex-direction: column;
+                    padding: 4px 8px;
+                    background: var(--comfy-menu-bg);
+                    border: 1px solid var(--border-color);
+                    border-radius: 6px;
+                    margin-top: -10px;
+                    box-sizing: border-box;
+                `;
 
-            const ui = createBrowserUI(this);
-            this._kinrolBatchLoadImagesUI = ui;
+                const btnRow = document.createElement("div");
+                btnRow.style.cssText = `display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px;`;
 
-            this.addDOMWidget("kinrol_batch_load_images", "customwidget", ui.container);
-            this.setSize([620, 900]);
+                const mkBtn = (label, onClick) => {
+                    const b = document.createElement("button");
+                    b.textContent = label;
+                    b.style.cssText = `
+                        flex: 1;
+                        min-width: 50px;
+                        padding: 4px 6px;
+                        background: var(--comfy-input-bg);
+                        color: var(--input-text);
+                        border: 1px solid var(--border-color);
+                        border-radius: 4px;
+                        cursor: pointer;
+                        font-size: 11px;
+                    `;
+                    b.onclick = onClick;
+                    return b;
+                };
 
-            _batchLoadImagesDomUIs.add({
-                node: this,
-                container: ui.container,
-                redraw: ui.redraw,
-                setDragging: ui.setDragging,
-            });
+                let selectedFiles = new Set();
 
-            const prevOnRemoved = this.onRemoved;
-            this.onRemoved = function () {
-                for (const entry of _batchLoadImagesDomUIs) {
-                    if (entry?.node === this) {
-                        _batchLoadImagesDomUIs.delete(entry);
-                        break;
+                btnRow.appendChild(mkBtn("选择图片", () => openMultiSelect(this, { replace: true })));
+                btnRow.appendChild(mkBtn("添加图片", () => openMultiSelect(this, { replace: false })));
+                btnRow.appendChild(mkBtn("选择文件夹", () => openFolderSelect(this, { replace: true })));
+                btnRow.appendChild(mkBtn("全部队列", () => queueAllSequential(this)));
+                btnRow.appendChild(mkBtn("队列选中", () => queueSelectedSequential(this, selectedFiles)));
+                btnRow.appendChild(mkBtn("删除选中", () => {
+                    const names = parseImageList(imageListWidget.value);
+                    const remaining = names.filter((n) => !selectedFiles.has(n));
+                    selectedFiles.clear();
+                    setImageList(this, remaining);
+                }));
+                btnRow.appendChild(mkBtn("取消选择", () => {
+                    selectedFiles.clear();
+                    updateGrid();
+                }));
+                btnRow.appendChild(mkBtn("清空", () => {
+                    selectedFiles.clear();
+                    setImageList(this, []);
+                }));
+
+                container.appendChild(btnRow);
+
+                const infoRow = document.createElement("div");
+                infoRow.style.cssText = `
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    margin-bottom: 6px;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                `;
+
+                const info = document.createElement("div");
+                info.style.cssText = `font-size: 11px; opacity: 0.8;`;
+
+                const sizeControl = document.createElement("div");
+                sizeControl.style.cssText = `display: flex; align-items: center; gap: 4px; font-size: 11px;`;
+                const sizeLabel = document.createElement("span");
+                sizeLabel.textContent = "尺寸:";
+                const sizeSlider = document.createElement("input");
+                sizeSlider.type = "range";
+                sizeSlider.min = 60;
+                sizeSlider.max = 200;
+                sizeSlider.value = 100;
+                sizeSlider.style.cssText = `width: 60px;`;
+                const sizeValue = document.createElement("span");
+                sizeValue.style.cssText = `min-width: 35px; text-align: right;`;
+                sizeValue.textContent = "100px";
+                sizeControl.appendChild(sizeLabel);
+                sizeControl.appendChild(sizeSlider);
+                sizeControl.appendChild(sizeValue);
+
+                infoRow.appendChild(info);
+                infoRow.appendChild(sizeControl);
+
+                container.appendChild(infoRow);
+
+                const grid = document.createElement("div");
+                grid.className = "kinrol-thumb-grid";
+                grid.style.cssText = `
+                    display: none;
+                    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+                    gap: 8px;
+                    overflow-y: auto;
+                    background: var(--comfy-input-bg);
+                    padding: 8px;
+                    border-radius: 4px;
+                    flex: 1;
+                    min-height: 0;
+                    margin-top: 8px;
+                    user-select: none;
+                `;
+
+                const updateGrid = () => {
+                    const names = parseImageList(imageListWidget.value);
+                    grid.innerHTML = "";
+
+                    if (names.length === 0) {
+                        grid.style.display = "none";
+                        selectedFiles.clear();
+                        info.textContent = "没有图片";
+                        return;
                     }
+
+                    grid.style.display = "grid";
+                    grid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${sizeSlider.value}px, 1fr))`;
+
+                    info.textContent = `${names.length} 张图片${selectedFiles.size > 0 ? ` (已选${selectedFiles.size}张)` : ""}`;
+
+                    names.forEach((name, idx) => {
+                        const cell = document.createElement("div");
+                        cell.className = "kinrol-thumb-cell";
+                        cell.dataset.filename = name;
+                        cell.style.cssText = `display: flex; flex-direction: column; gap: 2px;`;
+
+                        const thumb = document.createElement("div");
+                        thumb.style.cssText = `
+                            position: relative;
+                            border-radius: 4px;
+                            overflow: hidden;
+                            border: 2px solid ${selectedFiles.has(name) ? "#4a6" : "transparent"};
+                            background: #000;
+                            width: 100%;
+                            aspect-ratio: 1;
+                        `;
+
+                        const img = document.createElement("img");
+                        img.src = `/view?filename=${encodeURIComponent(name)}&type=input&subfolder=`;
+                        img.alt = name;
+                        img.loading = "lazy";
+                        img.style.cssText = `width: 100%; height: 100%; object-fit: contain;`;
+
+                        const label = document.createElement("div");
+                        label.textContent = name;
+                        label.title = name;
+                        label.style.cssText = `font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;`;
+
+                        const del = document.createElement("button");
+                        del.textContent = "×";
+                        del.title = "删除";
+                        del.style.cssText = `
+                            position: absolute;
+                            top: 1px;
+                            right: 1px;
+                            width: 16px;
+                            height: 16px;
+                            background: rgba(255, 0, 0, 0.75);
+                            color: #fff;
+                            border: none;
+                            border-radius: 2px;
+                            cursor: pointer;
+                            font-size: 12px;
+                            line-height: 1;
+                        `;
+                        del.onclick = (e) => {
+                            e.stopPropagation();
+                            const currentNames = parseImageList(imageListWidget.value);
+                            const next = currentNames.slice(0, idx).concat(currentNames.slice(idx + 1));
+                            selectedFiles.delete(name);
+                            setImageList(this, next);
+                        };
+
+                        thumb.appendChild(img);
+                        thumb.appendChild(del);
+                        cell.appendChild(thumb);
+                        cell.appendChild(label);
+                        grid.appendChild(cell);
+                    });
+                };
+
+                const prevCallback = imageListWidget.callback;
+                imageListWidget.callback = (value) => {
+                    prevCallback?.(value);
+                    updateGrid();
+                };
+
+                sizeSlider.addEventListener("input", () => {
+                    sizeValue.textContent = sizeSlider.value + "px";
+                    updateGrid();
+                });
+
+                // Click selection
+                grid.addEventListener("click", (e) => {
+                    const cell = e.target.closest(".kinrol-thumb-cell");
+                    if (cell && !e.target.closest("button")) {
+                        const filename = cell.dataset.filename;
+                        if (selectedFiles.has(filename)) {
+                            selectedFiles.delete(filename);
+                        } else {
+                            selectedFiles.add(filename);
+                        }
+                        updateGrid();
+                    }
+                });
+
+                // Box selection
+                const DRAG_THRESHOLD = 3;
+                let selectionRect = null;
+                let startX = 0, startY = 0;
+                let isSelecting = false;
+
+                grid.addEventListener("mousedown", (e) => {
+                    if (e.button !== 0 || e.target.closest("button")) return;
+                    e.preventDefault();
+                    startX = e.clientX;
+                    startY = e.clientY;
+                    isSelecting = false;
+
+                    const onMouseMove = (e) => {
+                        const dx = e.clientX - startX;
+                        const dy = e.clientY - startY;
+
+                        if (!isSelecting && (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD)) {
+                            isSelecting = true;
+                            selectionRect = document.createElement("div");
+                            selectionRect.style.cssText = `
+                                position: fixed;
+                                border: 2px dashed #4a6;
+                                background: rgba(74, 170, 102, 0.15);
+                                pointer-events: none;
+                                z-index: 9999;
+                                left: ${startX}px;
+                                top: ${startY}px;
+                                width: 0;
+                                height: 0;
+                            `;
+                            document.body.appendChild(selectionRect);
+                        }
+
+                        if (isSelecting && selectionRect) {
+                            e.preventDefault();
+                            const left = Math.min(startX, e.clientX);
+                            const top = Math.min(startY, e.clientY);
+                            selectionRect.style.left = `${left}px`;
+                            selectionRect.style.top = `${top}px`;
+                            selectionRect.style.width = `${Math.abs(e.clientX - startX)}px`;
+                            selectionRect.style.height = `${Math.abs(e.clientY - startY)}px`;
+                        }
+                    };
+
+                    const onMouseUp = (e) => {
+                        if (isSelecting && selectionRect) {
+                            const rect = selectionRect.getBoundingClientRect();
+                            const thumbCells = grid.querySelectorAll(".kinrol-thumb-cell");
+
+                            const insideFiles = new Set();
+                            thumbCells.forEach((cell) => {
+                                const cellRect = cell.getBoundingClientRect();
+                                if (!(rect.right < cellRect.left || rect.left > cellRect.right ||
+                                    rect.bottom < cellRect.top || rect.top > cellRect.bottom)) {
+                                    insideFiles.add(cell.dataset.filename);
+                                }
+                            });
+
+                            if (insideFiles.size > 0) {
+                                const allInside = [...insideFiles].every(f => selectedFiles.has(f));
+                                if (allInside) {
+                                    insideFiles.forEach(f => selectedFiles.delete(f));
+                                } else {
+                                    insideFiles.forEach(f => selectedFiles.add(f));
+                                }
+                                updateGrid();
+                            }
+
+                            selectionRect.remove();
+                            selectionRect = null;
+                        }
+
+                        document.removeEventListener("mousemove", onMouseMove);
+                        document.removeEventListener("mouseup", onMouseUp);
+                        isSelecting = false;
+                    };
+
+                    document.addEventListener("mousemove", onMouseMove);
+                    document.addEventListener("mouseup", onMouseUp);
+                });
+
+                // Drag and drop
+                container.addEventListener("dragover", (e) => {
+                    const dt = e.dataTransfer;
+                    if (!dt || !Array.from(dt.types || []).includes("Files")) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    container.style.borderColor = "#4a6";
+                });
+
+                container.addEventListener("dragleave", () => {
+                    container.style.borderColor = "var(--border-color)";
+                });
+
+                container.addEventListener("drop", async (e) => {
+                    const dt = e.dataTransfer;
+                    if (!dt || !Array.from(dt.types || []).includes("Files")) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    container.style.borderColor = "var(--border-color)";
+                    await uploadFilesSequential(this, Array.from(dt.files || []), { replace: false });
+                });
+
+                container.appendChild(grid);
+
+                setTimeout(() => updateGrid(), 50);
+
+                if (typeof this.addDOMWidget === 'function') {
+                    const domWidget = this.addDOMWidget("kinrol_batch_load_images", "customwidget", container);
+                    
+                    const updateContainerHeight = () => {
+                        // 延迟一帧确保 DOM 已经挂载并渲染
+                        requestAnimationFrame(() => {
+                            if (!container.parentElement) return;
+                            
+                            // 获取挂件在节点内部的 y 偏移
+                            // last_y 是 ComfyUI 挂件系统记录的 y 坐标
+                            const y = domWidget.last_y || 0;
+                            const nodeHeight = this.size[1];
+                            
+                            // 计算剩余可用高度，预留一定的 margin (例如 15px)
+                            const availableHeight = nodeHeight - y - 15;
+                            const finalHeight = Math.max(100, availableHeight);
+                            
+                            container.style.height = `${finalHeight}px`;
+                        });
+                    };
+
+                    // 使 DOM 挂件能够响应节点缩放，计算高度以填满节点底部
+                    domWidget.computeSize = (width) => {
+                        // 告知系统我们需要填满剩余空间，但不要定死高度，以便节点可以缩小
+                        return [width, 100]; 
+                    };
+
+                    const origOnResize = this.onResize;
+                    this.onResize = function(size) {
+                        origOnResize?.apply(this, arguments);
+                        updateContainerHeight();
+                    };
+
+                    // 初始化时调用一次
+                    updateContainerHeight();
                 }
-                prevOnRemoved?.apply(this, arguments);
-            };
+
+                if (typeof this.setSize === 'function') {
+                    this.setSize([620, 620]);
+                }
+
+            } catch (e) {
+                console.error("KinrolBatchLoadImages error:", e);
+            }
 
             return r;
         };

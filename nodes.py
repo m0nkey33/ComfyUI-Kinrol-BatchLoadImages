@@ -1,4 +1,3 @@
-# nodes.py
 import os
 import hashlib
 import numpy as np
@@ -9,10 +8,9 @@ import node_helpers
 
 class KinrolBatchLoadImages:
     """
-    批量加载图片节点，支持逐张入队、选择图片、追加图片、选择文件夹、清空列表等功能。
-    图片列表通过前端UI管理，后端负责加载和输出图片。
+    Batch image loading node with compatibility for old workflows.
     """
-    
+
     @classmethod
     def INPUT_TYPES(s):
         return {
@@ -28,8 +26,6 @@ class KinrolBatchLoadImages:
                 "max_images": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
                 "mode": (["batch", "single"], {"default": "batch"}),
                 "index": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
-                # 新增：控制前端预览网格的最大行数
-                "max_rows": ("INT", {"default": 5, "min": 1, "max": 20, "step": 1}),
             }
         }
 
@@ -38,12 +34,7 @@ class KinrolBatchLoadImages:
     RETURN_NAMES = ("images", "filenames")
     FUNCTION = "load_images"
 
-    def load_images(self, image_list: str, max_images: int, mode: str, index: int, max_rows: int):
-        """
-        加载图片列表中的图片。
-        - mode="batch": 加载所有图片并作为批次返回。
-        - mode="single": 加载指定索引的单张图片。
-        """
+    def load_images(self, image_list: str, max_images: int = 0, mode: str = "batch", index: int = 0):
         names = [x.strip() for x in (image_list or "").splitlines()]
         names = [x for x in names if x]
 
@@ -106,7 +97,7 @@ class KinrolBatchLoadImages:
         return (output_image, "\n".join(output_names))
 
     @classmethod
-    def IS_CHANGED(s, image_list: str, max_images: int, mode: str, index: int, max_rows: int):
+    def IS_CHANGED(s, image_list: str, max_images: int = 0, mode: str = "batch", index: int = 0):
         m = hashlib.sha256()
         names = [x.strip() for x in (image_list or "").splitlines()]
         names = [x for x in names if x]
@@ -127,7 +118,6 @@ class KinrolBatchLoadImages:
         m.update(str(mode).encode("utf-8"))
         m.update(str(index).encode("utf-8"))
         m.update(str(max_images).encode("utf-8"))
-        m.update(str(max_rows).encode("utf-8"))  # 纳入哈希计算
         for name in names:
             m.update(name.encode("utf-8"))
             if folder_paths.exists_annotated_filepath(name):
@@ -138,7 +128,7 @@ class KinrolBatchLoadImages:
         return m.digest().hex()
 
     @classmethod
-    def VALIDATE_INPUTS(s, image_list: str, max_images: int, mode: str, index: int, max_rows: int):
+    def VALIDATE_INPUTS(s, image_list: str, max_images: int = 0, mode: str = "batch", index: int = 0):
         names = [x.strip() for x in (image_list or "").splitlines()]
         names = [x for x in names if x]
 
