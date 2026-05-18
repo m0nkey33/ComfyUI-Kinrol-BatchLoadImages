@@ -963,7 +963,7 @@ app.registerExtension({
             this._kinrolBatchLoadImagesUI = ui;
 
             this.addDOMWidget("kinrol_batch_load_images", "customwidget", ui.container);
-            this.setSize([630]);
+            this.setSize([620, 900]);
 
             _batchLoadImagesDomUIs.add({
                 node: this,
